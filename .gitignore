@@ -1,0 +1,29 @@
+# dependências
+node_modules/
+
+# variáveis de ambiente (contém as chaves do Supabase)
+.env
+.env.local
+.env.*.local
+
+# build
+dist/
+dist-ssr/
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# sistema operacional
+.DS_Store
+Thumbs.db
+
+# vite
+*.local
