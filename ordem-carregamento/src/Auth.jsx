@@ -18,7 +18,7 @@ export default function Auth() {
     } else {
       const { error } = await supabase.auth.signUp({ email, password });
       if (error) setMsg(error.message);
-      else setMsg('Conta criada! Se a confirmação por e-mail estiver ativada no seu projeto Supabase, verifique sua caixa de entrada antes de entrar.');
+      else setMsg('Conta criada!');
     }
     setBusy(false);
   };

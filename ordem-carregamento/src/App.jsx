@@ -17,7 +17,7 @@ const formatEmbalagem = (unidade) => {
 };
 
 const blankOrder = () => ({
-  id: null,
+  id: null, status: 'agendada',
   dataEntrega: '', hora: '', nf: '', transportadora: '1',
   truckId: '', motorista: '',
   produtores: [{ id: 1, nome: '', items: [{ id: 1, productId: '', quantidade: '', precoOverride: '', lote: '' }] }],
@@ -96,6 +96,9 @@ function Main({ session, profile }) {
   const [orders, setOrders] = useState([]);
   const [order, setOrder] = useState(blankOrder());
   const [saveState, setSaveState] = useState('idle');
+  const [filtroCaminhao, setFiltroCaminhao] = useState('');
+  const [filtroDataDe, setFiltroDataDe] = useState('');
+  const [filtroDataAte, setFiltroDataAte] = useState('');
 
   const tabs = [
     { key: 'nova', label: 'Nova Ordem', icon: FilePlus },
@@ -126,6 +129,14 @@ function Main({ session, profile }) {
     if (!error) { setTruckForm({ placa: '', motorista: ''}); loadAll(); }
   };
   const removeTruck = async (id) => { await supabase.from('trucks').delete().eq('id', id); loadAll(); };
+
+  const entreguesFiltradas = orders.filter(o => {
+  if (o.status !== 'entregue') return false;
+  if (filtroCaminhao && o.truck_id !== filtroCaminhao) return false;
+  if (filtroDataDe && (!o.data_entrega || o.data_entrega < filtroDataDe)) return false;
+  if (filtroDataAte && (!o.data_entrega || o.data_entrega > filtroDataAte)) return false;
+  return true;
+  });
 
   // ---- Produtos ----
   const [productForm, setProductForm] = useState({ descricao: '', unidade: 'Sacos 50kg', especie: 'ADUBO' });
@@ -203,7 +214,7 @@ const saveOrder = async () => {
         })),
         subtotalSacos: p.subtotalSacos, subtotalValor: p.subtotalValor,
       })),
-      total_sacos: totalSacos, total_valor: totalValor,
+      total_sacos: totalSacos, total_valor: totalValor, status: order.status || 'agendada',
     };
 
     let error;
@@ -220,9 +231,13 @@ const saveOrder = async () => {
   };
 
   const deleteOrder = async (id) => { await supabase.from('orders').delete().eq('id', id); loadAll(); };
+  const markAsDelivered = async (id) => {
+  await supabase.from('orders').update({ status: 'entregue' }).eq('id', id);
+  loadAll();
+  };
   const loadOrderIntoForm = (o) => {
     setOrder({
-      id: o.id,
+      id: o.id, status: o.status || 'agendada',
       dataEntrega: o.data_entrega || '', hora: o.hora || '', nf: o.nf || '', transportadora: o.transportadora || '1',
       truckId: o.truck_id || '', motorista: o.motorista || '',
       produtores: (o.produtores && o.produtores.length ? o.produtores : [{ nome: '', items: [] }]).map((p, i) => ({
@@ -425,27 +440,73 @@ const saveOrder = async () => {
         )}
 
         {tab === 'historico' && (
-          <div className="ocw-card">
-            <h2><HistoryIcon size={17} /> Ordens salvas</h2>
-            {orders.length === 0 ? (
-              <div className="ocw-empty">Nenhuma ordem salva ainda.</div>
-            ) : (
-              orders.map(o => (
-                <div className="ocw-list-row" key={o.id}>
-                  <div>
-                    <b>{dateBR(o.data_entrega)}</b> — {(o.produtores || []).map(p => p.nome).filter(Boolean).join(', ') || 'sem produtor'}{' '}
-                    <span className="ocw-tag">{o.total_sacos} sacos</span>
+          <>
+            <div className="ocw-card">
+              <h2><HistoryIcon size={17} /> Cargas agendadas</h2>
+              {orders.filter(o => (o.status || 'agendada') === 'agendada').length === 0 ? (
+                <div className="ocw-empty">Nenhuma carga agendada.</div>
+              ) : (
+                orders.filter(o => (o.status || 'agendada') === 'agendada').map(o => (
+                  <div className="ocw-list-row" key={o.id}>
+                    <div>
+                      <b>{dateBR(o.data_entrega)}</b> — {(o.produtores || []).map(p => p.nome).filter(Boolean).join(', ') || 'sem produtor'}{' '}
+                      <span className="ocw-tag">{o.total_sacos} sacos</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.4rem' }}>
+                      <button className="ocw-btn ghost" onClick={() => loadOrderIntoForm(o)}>Ver / reimprimir</button>
+                      <button className="ocw-btn primary" onClick={() => markAsDelivered(o.id)}>Marcar como entregue</button>
+                      {(isAdmin || o.created_by === session.user.id) && (
+                        <button className="ocw-btn danger" onClick={() => deleteOrder(o.id)}><Trash2 size={15} /></button>
+                      )}
+                    </div>
                   </div>
-                  <div style={{ display: 'flex', gap: '0.4rem' }}>
-                    <button className="ocw-btn ghost" onClick={() => loadOrderIntoForm(o)}>Ver / reimprimir</button>
-                    {(isAdmin || o.created_by === session.user.id) && (
-                      <button className="ocw-btn danger" onClick={() => deleteOrder(o.id)}><Trash2 size={15} /></button>
-                    )}
+                ))
+              )}
+            </div>
+
+            <div className="ocw-card">
+              <h2><HistoryIcon size={17} /> Cargas entregues</h2>
+              <div className="ocw-grid g2" style={{ marginBottom: '0.9rem' }}>
+                <div className="ocw-field">
+                  <label>Filtrar por caminhão</label>
+                  <select value={filtroCaminhao} onChange={e => setFiltroCaminhao(e.target.value)}>
+                    <option value="">Todos</option>
+                    {trucks.map(t => <option key={t.id} value={t.id}>{t.placa} — {t.motorista}</option>)}
+                  </select>
+                </div>
+                <div className="ocw-grid g2">
+                  <div className="ocw-field">
+                    <label>De</label>
+                    <input type="date" value={filtroDataDe} onChange={e => setFiltroDataDe(e.target.value)} />
+                  </div>
+                  <div className="ocw-field">
+                    <label>Até</label>
+                    <input type="date" value={filtroDataAte} onChange={e => setFiltroDataAte(e.target.value)} />
                   </div>
                 </div>
-              ))
-            )}
-          </div>
+              </div>
+
+              {entreguesFiltradas.length === 0 ? (
+                <div className="ocw-empty">Nenhuma carga entregue encontrada.</div>
+              ) : (
+                entreguesFiltradas.map(o => (
+                  <div className="ocw-list-row" key={o.id}>
+                    <div>
+                      <b>{dateBR(o.data_entrega)}</b> — {(o.produtores || []).map(p => p.nome).filter(Boolean).join(', ') || 'sem produtor'}{' '}
+                      <span className="ocw-tag">{trucks.find(t => t.id === o.truck_id)?.placa || '—'}</span>{' '}
+                      <span className="ocw-tag">{o.total_sacos} sacos</span>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.4rem' }}>
+                      <button className="ocw-btn ghost" onClick={() => loadOrderIntoForm(o)}>Ver / reimprimir</button>
+                      {(isAdmin || o.created_by === session.user.id) && (
+                        <button className="ocw-btn danger" onClick={() => deleteOrder(o.id)}><Trash2 size={15} /></button>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </>
         )}
 
         {tab === 'nova' && (
