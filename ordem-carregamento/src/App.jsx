@@ -46,6 +46,48 @@ export default function App() {
   return <Main session={session} profile={profile} />;
 }
 
+function ProductPicker({ products, value, onChange }) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const selected = products.find(p => p.id === value);
+  const filtered = products.filter(p => productLabel(p).toLowerCase().includes(query.toLowerCase()));
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <input
+        value={open ? query : (selected ? productLabel(selected) : '')}
+        onFocus={() => { setQuery(''); setOpen(true); }}
+        onChange={e => setQuery(e.target.value)}
+        onBlur={() => setTimeout(() => setOpen(false), 150)}
+        placeholder="Buscar produto…"
+      />
+      {open && (
+        <div style={{
+          position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 20,
+          background: '#FDFBF5', border: '1px solid var(--rule-strong)', borderRadius: 6,
+          maxHeight: 220, overflowY: 'auto', marginTop: 2, boxShadow: '0 4px 10px rgba(0,0,0,0.12)',
+        }}>
+          {filtered.length === 0 ? (
+            <div style={{ padding: '0.55rem 0.6rem', fontSize: '0.82rem', color: 'var(--ink-soft)' }}>Nenhum produto encontrado</div>
+          ) : (
+            filtered.map(p => (
+              <div
+                key={p.id}
+                onMouseDown={() => { onChange(p.id); setOpen(false); }}
+                style={{ padding: '0.5rem 0.6rem', fontSize: '0.85rem', cursor: 'pointer' }}
+                onMouseEnter={e => (e.currentTarget.style.background = 'var(--paper-dim)')}
+                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+              >
+                {productLabel(p)}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Main({ session, profile }) {
   const isAdmin = profile.role === 'admin';
   const [tab, setTab] = useState('nova');
@@ -476,10 +518,7 @@ const saveOrder = async () => {
                       <div className="ocw-item-row" key={it.id}>
                         <div className="ocw-field">
                           <label>Produto</label>
-                          <select value={it.productId} onChange={e => updateItem(p.id, it.id, { productId: e.target.value })}>
-                            <option value="">Selecionar…</option>
-                            {products.map(pr => <option key={pr.id} value={pr.id}>{productLabel(pr)}</option>)}
-                          </select>
+                          <ProductPicker products={products} value={it.productId} onChange={id => updateItem(p.id, it.id, { productId: id })} />
                         </div>
                         <div className="ocw-field">
                           <label>Quantidade</label>
