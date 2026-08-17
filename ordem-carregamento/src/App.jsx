@@ -17,6 +17,7 @@ const formatEmbalagem = (unidade) => {
 };
 
 const blankOrder = () => ({
+  id: null,
   dataEntrega: '', hora: '', nf: '', transportadora: '1',
   truckId: '', motorista: '',
   produtores: [{ id: 1, nome: '', items: [{ id: 1, productId: '', quantidade: '', precoOverride: '', lote: '' }] }],
@@ -147,9 +148,8 @@ const totalProdutores = order.produtores.reduce((s, p) => s + (Number(p.quantida
 
 
 const saveOrder = async () => {
-  setSaveState('saving');
-  const { error } = await supabase.from('orders').insert({
-      created_by: session.user.id,
+    setSaveState('saving');
+    const payload = {
       data_entrega: order.dataEntrega || null,
       hora: order.hora || null,
       nf: order.nf, transportadora: order.transportadora, truck_id: order.truckId || null, motorista: order.motorista,
@@ -162,7 +162,17 @@ const saveOrder = async () => {
         subtotalSacos: p.subtotalSacos, subtotalValor: p.subtotalValor,
       })),
       total_sacos: totalSacos, total_valor: totalValor,
-    });
+    };
+
+    let error;
+    if (order.id) {
+      ({ error } = await supabase.from('orders').update(payload).eq('id', order.id));
+    } else {
+      const { data, error: insertError } = await supabase.from('orders').insert({ ...payload, created_by: session.user.id }).select().single();
+      error = insertError;
+      if (!error && data) setOrder(o => ({ ...o, id: data.id }));
+    }
+
     if (!error) { await loadAll(); setSaveState('saved'); setTimeout(() => setSaveState('idle'), 1800); }
     else setSaveState('idle');
   };
@@ -170,6 +180,7 @@ const saveOrder = async () => {
   const deleteOrder = async (id) => { await supabase.from('orders').delete().eq('id', id); loadAll(); };
   const loadOrderIntoForm = (o) => {
     setOrder({
+      id: o.id,
       dataEntrega: o.data_entrega || '', hora: o.hora || '', nf: o.nf || '', transportadora: o.transportadora || '1',
       truckId: o.truck_id || '', motorista: o.motorista || '',
       produtores: (o.produtores && o.produtores.length ? o.produtores : [{ nome: '', items: [] }]).map((p, i) => ({
@@ -509,7 +520,7 @@ const saveOrder = async () => {
 
               <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
                 <button className="ocw-btn primary" onClick={saveOrder} disabled={saveState === 'saving'}>
-                  <Save size={15} /> Salvar ordem
+                  <Save size={15} /> {order.id ? 'Atualizar ordem' : 'Salvar ordem'}
                 </button>
                 <button className="ocw-btn amber" onClick={handlePrint}><Printer size={15} /> Imprimir / Salvar PDF</button>
                 <button className="ocw-btn ghost" onClick={startNewOrder}>Nova ordem em branco</button>
