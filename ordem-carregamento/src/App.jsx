@@ -292,7 +292,11 @@ const saveOrder = async () => {
         .ocw-empty { padding:1.2rem; text-align:center; color:var(--ink-soft); font-size:0.85rem; border:1px dashed var(--rule-strong); border-radius:8px; }
         .ocw-item-row { display:grid; grid-template-columns:2.2fr 0.9fr 1fr 1fr 1fr auto; gap:0.5rem; align-items:end; padding:0.6rem 0; border-bottom:1px dashed var(--rule); }
         @media (max-width:900px){ .ocw-item-row{grid-template-columns:1fr 1fr;} }
-        .ocw-doc { background:#FFFEF9; border:2px solid var(--ink); font-family:'IBM Plex Mono',monospace; font-size:0.82rem; color:var(--ink); }
+        .ocw-doc {
+          background:#FFFEF9; border:2px solid var(--ink); font-family:'IBM Plex Mono',monospace; font-size:0.82rem; color:var(--ink);
+          box-decoration-break: clone;
+          -webkit-box-decoration-break: clone;
+        }
         .ocw-doc .row { display:flex; border-bottom:1px solid var(--ink); }
         .ocw-doc .row:last-child { border-bottom:none; }
         .ocw-doc .cell { padding:0.45rem 0.6rem; min-width:0; }
