@@ -321,6 +321,7 @@ const saveOrder = async () => {
         .ocw-preview-wrap { display: block !important; }
         .ocw-print-area { width: 100% !important; padding: 0.2in; margin: 0 !important; }
         .ocw-doc { border-width: 2px; max-width: 100% !important; }
+        .produtor-block { break-inside: avoid; page-break-inside: avoid; }
         @page { margin: 0.3in; }
       }
       `}</style>
@@ -650,7 +651,7 @@ const saveOrder = async () => {
 
                 <div className="section-label">Itens por produtor</div>
                 {produtoresComputed.filter(p => p.nome).map(p => (
-                  <React.Fragment key={p.id}>
+                  <div className="produtor-block" key={p.id}>
                     <div className="row" style={{ background: 'var(--paper-dim)' }}>
                       <div className="cell grow"><b>{p.nome}</b></div>
                     </div>
@@ -671,12 +672,12 @@ const saveOrder = async () => {
                         <div className="row lote-row"><div className="cell grow">Lote: {it.lote}</div></div>
                       </React.Fragment>
                     ))}
-                    <div className="row">
-                      <div className="cell grow right">Subtotal {p.nome}:</div>
-                      <div className="cell">{p.subtotalPorTipoLabel} — R$ {brl(p.subtotalValor)}</div>
-                    </div>
-                  </React.Fragment>
-                ))}
+                        <div className="row">
+                          <div className="cell grow right">Subtotal {p.nome}:</div>
+                          <div className="cell">{p.subtotalPorTipoLabel} — R$ {brl(p.subtotalValor)}</div>
+                        </div>
+                      </div>
+                    ))}
                 <div className="row total-row">
                   <div className="cell grow right">Quant. Total:</div>
                   <div className="cell">{totalPorTipoLabel}</div>
