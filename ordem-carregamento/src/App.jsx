@@ -410,6 +410,7 @@ const saveOrder = async () => {
                     <option value="Sacos 25kg">Sacos 25 kg</option>
                     <option value="Sacos 40kg">Sacos 40 kg</option>
                     <option value="Sacos 50kg">Sacos 50 kg</option>
+                    <option value="Bags 500kg">Bags 500 kg</option>
                     <option value="Bags 800kg">Bags 800 kg</option>
                     <option value="Bags 1000kg">Bags 1000 kg</option>
                   </select>
