@@ -413,6 +413,7 @@ const saveOrder = async () => {
                     <option value="Bags 500kg">Bags 500 kg</option>
                     <option value="Bags 800kg">Bags 800 kg</option>
                     <option value="Bags 1000kg">Bags 1000 kg</option>
+                    <option value="Bags 700kg">Bags 700 kg (Bolsa Branca)</option>
                   </select>
                 </div>
                 <div className="ocw-field">
