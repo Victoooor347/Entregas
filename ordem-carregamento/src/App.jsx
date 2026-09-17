@@ -8,6 +8,23 @@ import Auth from './Auth';
 
 const brl = (n) => (Number(n) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const dateBR = (iso) => { if (!iso) return '____.____.______'; const [y, m, d] = iso.split('-'); return `${d}.${m}.${y}`; };
+const criadorLabel = (profiles, userId) => {
+  const email = profiles.find(p => p.id === userId)?.email;
+  if (!email) return '—';
+  const nome = email.split('@')[0];
+  return nome.charAt(0).toUpperCase() + nome.slice(1);
+};
+const orderTipoLabel = (o) => {
+  const totals = (o.produtores || []).reduce((acc, p) => {
+    (p.items || []).forEach(it => {
+      const tipo = formatEmbalagem(it.unidade);
+      acc[tipo] = (acc[tipo] || 0) + (Number(it.quantidade) || 0);
+    });
+    return acc;
+  }, {});
+  const entries = Object.entries(totals);
+  return entries.length ? entries.map(([tipo, qtd]) => `${qtd} ${tipo}`).join(' e ') : `${o.total_sacos} sacos`;
+};
 const productLabel = (p) => p ? `${p.especie} ${p.descricao} — ${p.unidade}` : '';
 const formatEmbalagem = (unidade) => {
   if (!unidade) return 'sacos';
@@ -94,6 +111,7 @@ function Main({ session, profile }) {
   const [trucks, setTrucks] = useState([]);
   const [products, setProducts] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [profiles, setProfiles] = useState([]);
   const [order, setOrder] = useState(blankOrder());
   const [saveState, setSaveState] = useState('idle');
   const [filtroCaminhao, setFiltroCaminhao] = useState('');
@@ -110,12 +128,13 @@ function Main({ session, profile }) {
   ];
 
   const loadAll = async () => {
-    const [{ data: t }, { data: p }, { data: o }] = await Promise.all([
+    const [{ data: t }, { data: p }, { data: o }, { data: pf }] = await Promise.all([
       supabase.from('trucks').select('*').order('placa'),
       supabase.from('products').select('*').order('descricao'),
       supabase.from('orders').select('*').order('created_at', { ascending: false }),
+      supabase.from('profiles').select('id, email'),
     ]);
-    setTrucks(t || []); setProducts(p || []); setOrders(o || []);
+    setTrucks(t || []); setProducts(p || []); setOrders(o || []); setProfiles(pf || []);
   };
   useEffect(() => { loadAll(); }, []);
 
@@ -209,9 +228,9 @@ const saveOrder = async () => {
       produtores: produtoresComputed.filter(p => p.nome).map(p => ({
         nome: p.nome,
         items: p.items.filter(it => it.productId).map(it => ({
-          productId: it.productId, descricao: it.prod?.descricao, quantidade: Number(it.quantidade) || 0,
-          preco: it.preco, total: it.total, lote: it.lote,
-        })),
+        productId: it.productId, descricao: it.prod?.descricao, unidade: it.prod?.unidade, quantidade: Number(it.quantidade) || 0,
+        preco: it.preco, total: it.total, lote: it.lote,
+      })),
         subtotalSacos: p.subtotalSacos, subtotalValor: p.subtotalValor,
       })),
       total_sacos: totalSacos, total_valor: totalValor, status: order.status || 'agendada',
@@ -457,7 +476,8 @@ const saveOrder = async () => {
                   <div className="ocw-list-row" key={o.id}>
                     <div>
                       <b>{dateBR(o.data_entrega)}</b> — {(o.produtores || []).map(p => p.nome).filter(Boolean).join(', ') || 'sem produtor'}{' '}
-                      <span className="ocw-tag">{o.total_sacos} sacos</span>
+                      <span className="ocw-tag">{orderTipoLabel(o)}</span>{' '}
+                      <span className="ocw-tag">por {criadorLabel(profiles, o.created_by)}</span>
                     </div>
                     <div style={{ display: 'flex', gap: '0.4rem' }}>
                       <button className="ocw-btn ghost" onClick={() => loadOrderIntoForm(o)}>Ver / reimprimir</button>
@@ -501,7 +521,8 @@ const saveOrder = async () => {
                     <div>
                       <b>{dateBR(o.data_entrega)}</b> — {(o.produtores || []).map(p => p.nome).filter(Boolean).join(', ') || 'sem produtor'}{' '}
                       <span className="ocw-tag">{trucks.find(t => t.id === o.truck_id)?.placa || '—'}</span>{' '}
-                      <span className="ocw-tag">{o.total_sacos} sacos</span>
+                      <span className="ocw-tag">{orderTipoLabel(o)}</span>{' '}
+                      <span className="ocw-tag">por {criadorLabel(profiles, o.created_by)}</span>
                     </div>
                     <div style={{ display: 'flex', gap: '0.4rem' }}>
                       <button className="ocw-btn ghost" onClick={() => loadOrderIntoForm(o)}>Ver / reimprimir</button>
