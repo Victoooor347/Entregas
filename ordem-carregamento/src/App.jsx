@@ -37,7 +37,7 @@ const blankOrder = () => ({
   id: null, status: 'agendada',
   dataEntrega: '', hora: '', nf: '', transportadora: '1',
   truckId: '', motorista: '',
-  produtores: [{ id: 1, nome: '', items: [{ id: 1, productId: '', quantidade: '', precoOverride: '', lote: '' }] }],
+  produtores: [{ id: 1, nome: '', items: [{ id: 1, productId: '', quantidade: '', precoOverride: '', pagamento: '' }] }],
 });
 
 export default function App() {
@@ -172,7 +172,7 @@ function Main({ session, profile }) {
   const updateItem = (pid, itemId, patch) =>
   setOrder(o => ({ ...o, produtores: o.produtores.map(p => p.id === pid ? { ...p, items: p.items.map(it => it.id === itemId ? { ...it, ...patch } : it) } : p) }));
   const addItem = (pid) =>
-    setOrder(o => ({ ...o, produtores: o.produtores.map(p => p.id === pid ? { ...p, items: [...p.items, { id: Date.now(), productId: '', quantidade: '', precoOverride: '', lote: '' }] } : p) }));
+    setOrder(o => ({ ...o, produtores: o.produtores.map(p => p.id === pid ? { ...p, items: [...p.items, { id: Date.now(), productId: '', quantidade: '', precoOverride: '', pagamento: '' }] } : p) }));
   const removeItem = (pid, itemId) =>
     setOrder(o => ({ ...o, produtores: o.produtores.map(p => p.id === pid ? { ...p, items: p.items.filter(it => it.id !== itemId) } : p) }));
   
@@ -212,7 +212,7 @@ function Main({ session, profile }) {
   const updateProdutorNome = (pid, nome) =>
   setOrder(o => ({ ...o, produtores: o.produtores.map(p => p.id === pid ? { ...p, nome } : p) }));
   const addProdutor = () =>
-    setOrder(o => ({ ...o, produtores: [...o.produtores, { id: Date.now(), nome: '', items: [{ id: Date.now() + 1, productId: '', quantidade: '', precoOverride: '', lote: '' }] }] }));
+    setOrder(o => ({ ...o, produtores: [...o.produtores, { id: Date.now(), nome: '', items: [{ id: Date.now() + 1, productId: '', quantidade: '', precoOverride: '', pagamento: '' }] }] }));
   const removeProdutor = (pid) =>
     setOrder(o => ({ ...o, produtores: o.produtores.filter(p => p.id !== pid) }));
 
@@ -228,9 +228,9 @@ const saveOrder = async () => {
       produtores: produtoresComputed.filter(p => p.nome).map(p => ({
         nome: p.nome,
         items: p.items.filter(it => it.productId).map(it => ({
-        productId: it.productId, descricao: it.prod?.descricao, unidade: it.prod?.unidade, quantidade: Number(it.quantidade) || 0,
-        preco: it.preco, total: it.total, lote: it.lote,
-      })),
+          productId: it.productId, descricao: it.prod?.descricao, unidade: it.prod?.unidade, quantidade: Number(it.quantidade) || 0,
+          preco: it.preco, total: it.total, pagamento: it.pagamento,
+        })),
         subtotalSacos: p.subtotalSacos, subtotalValor: p.subtotalValor,
       })),
       total_sacos: totalSacos, total_valor: totalValor, status: order.status || 'agendada',
@@ -262,7 +262,7 @@ const saveOrder = async () => {
       produtores: (o.produtores && o.produtores.length ? o.produtores : [{ nome: '', items: [] }]).map((p, i) => ({
         id: i + 1,
         nome: p.nome,
-        items: (p.items || []).map((it, j) => ({ id: j + 1, productId: it.productId, quantidade: it.quantidade, precoOverride: it.preco ? String(it.preco) : '', lote: it.lote })),
+        items: (p.items || []).map((it, j) => ({ id: j + 1, productId: it.productId, quantidade: it.quantidade, precoOverride: it.preco ? String(it.preco) : '', pagamento: it.pagamento ?? it.lote ?? '' })),
       })),
     });
     setTab('nova');
@@ -624,8 +624,8 @@ const saveOrder = async () => {
                           />
                         </div>
                         <div className="ocw-field">
-                          <label>Lote</label>
-                          <input value={it.lote} onChange={e => updateItem(p.id, it.id, { lote: e.target.value })} />
+                          <label>Pagamento</label>
+                          <input value={it.pagamento} onChange={e => updateItem(p.id, it.id, { pagamento: e.target.value })} />
                         </div>
                         <div className="ocw-field">
                           <label>Total</label>
@@ -696,7 +696,7 @@ const saveOrder = async () => {
                           <div className="cell col-preco">R$ {brl(it.preco)}</div>
                           <div className="cell col-total">R$ {brl(it.total)}</div>
                         </div>
-                        <div className="row lote-row"><div className="cell grow">Lote: {it.lote}</div></div>
+                        <div className="row lote-row"><div className="cell grow">Pagamento: {it.pagamento}</div></div>
                       </React.Fragment>
                     ))}
                         <div className="row">
