@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useId } from 'react';
 import {
   Truck, Package, FilePlus, History as HistoryIcon, Printer,
   Trash2, Plus, Save, ClipboardList, LogOut, X, ShieldCheck
@@ -8,6 +8,11 @@ import Auth from './Auth';
 
 const brl = (n) => (Number(n) || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const dateBR = (iso) => { if (!iso) return '____.____.______'; const [y, m, d] = iso.split('-'); return `${d}.${m}.${y}`; };
+const dateHoraBR = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? '' : d.toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+};
 const criadorLabel = (profiles, userId) => {
   const email = profiles.find(p => p.id === userId)?.email;
   if (!email) return '—';
@@ -33,6 +38,8 @@ const formatEmbalagem = (unidade) => {
   return peso ? `${tipo} de ${peso}kg` : tipo;
 };
 
+const POR_PAGINA = 20; // cargas entregues carregadas por vez no histórico
+
 const blankOrder = () => ({
   id: null, status: 'agendada',
   dataEntrega: '', hora: '', nf: '', transportadora: '1',
@@ -40,9 +47,24 @@ const blankOrder = () => ({
   produtores: [{ id: 1, nome: '', items: [{ id: 1, productId: '', quantidade: '', precoOverride: '', pagamento: '' }] }],
 });
 
+function Aviso({ texto, children }) {
+  return (
+    <div style={{ padding: '2rem', fontFamily: 'system-ui, sans-serif', maxWidth: 520 }}>
+      <p style={{ margin: '0 0 1rem', lineHeight: 1.5 }}>{texto}</p>
+      {children && <div style={{ display: 'flex', gap: '0.5rem' }}>{children}</div>}
+    </div>
+  );
+}
+
+const avisoBtn = {
+  padding: '0.5rem 0.9rem', borderRadius: 7, border: '1px solid #A79A76',
+  background: '#F6F2E7', cursor: 'pointer', fontSize: '0.85rem',
+};
+
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = loading, null = logged out
   const [profile, setProfile] = useState(null);
+  const [profileError, setProfileError] = useState('');
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -51,14 +73,33 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!session) { setProfile(null); return; }
-    supabase.from('profiles').select('*').eq('id', session.user.id).single()
-      .then(({ data }) => setProfile(data));
+    if (!session) { setProfile(null); setProfileError(''); return; }
+    let cancelado = false;
+    setProfileError('');
+    // O perfil é criado por um trigger no Supabase logo após o cadastro, e pode
+    // levar um instante para aparecer. Tentamos algumas vezes antes de desistir,
+    // em vez de deixar a tela parada para sempre.
+    const buscarPerfil = async (tentativa = 0) => {
+      const { data, error } = await supabase
+        .from('profiles').select('*').eq('id', session.user.id).maybeSingle();
+      if (cancelado) return;
+      if (data) { setProfile(data); return; }
+      if (tentativa < 5) { setTimeout(() => buscarPerfil(tentativa + 1), 800); return; }
+      setProfileError(error?.message || 'seu perfil ainda não foi criado no banco de dados.');
+    };
+    buscarPerfil();
+    return () => { cancelado = true; };
   }, [session]);
 
-  if (session === undefined) return <div style={{ padding: '2rem', fontFamily: 'sans-serif' }}>Carregando…</div>;
+  if (session === undefined) return <Aviso texto="Carregando…" />;
   if (!session) return <Auth />;
-  if (!profile) return <div style={{ padding: '2rem', fontFamily: 'sans-serif' }}>Preparando sua conta…</div>;
+  if (profileError) return (
+    <Aviso texto={`Não foi possível carregar seu perfil: ${profileError}`}>
+      <button style={avisoBtn} onClick={() => window.location.reload()}>Tentar de novo</button>
+      <button style={avisoBtn} onClick={() => supabase.auth.signOut()}>Sair</button>
+    </Aviso>
+  );
+  if (!profile) return <Aviso texto="Preparando sua conta…" />;
 
   return <Main session={session} profile={profile} />;
 }
@@ -66,38 +107,109 @@ export default function App() {
 function ProductPicker({ products, value, onChange }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
+  const [destacado, setDestacado] = useState(0);
+  const listaRef = useRef(null);
+  const idBase = useId();
+
   const selected = products.find(p => p.id === value);
-  const filtered = products.filter(p => productLabel(p).toLowerCase().includes(query.toLowerCase()));
+  const filtered = useMemo(
+    () => products.filter(p => productLabel(p).toLowerCase().includes(query.toLowerCase())),
+    [products, query],
+  );
+
+  // Digitar muda a lista debaixo do destaque. Sem isto, o Enter selecionaria
+  // um item que já não está mais naquela posição.
+  useEffect(() => { setDestacado(0); }, [query, open]);
+
+  // Mantém à vista o item destacado enquanto se percorre com as setas.
+  useEffect(() => {
+    if (!open || !listaRef.current) return;
+    listaRef.current.querySelector(`[data-indice="${destacado}"]`)?.scrollIntoView({ block: 'nearest' });
+  }, [destacado, open]);
+
+  const escolher = (p) => { onChange(p.id); setOpen(false); };
+
+  // Abrir sempre começa de busca limpa. Sem isto, reabrir depois de escolher um
+  // produto traria de volta o texto digitado da vez anterior, já filtrando a lista.
+  const abrir = () => { setQuery(''); setOpen(true); };
+
+  const aoTeclar = (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!open) { abrir(); return; }
+      if (filtered.length === 0) return;
+      const passo = e.key === 'ArrowDown' ? 1 : -1;
+      setDestacado(i => (i + passo + filtered.length) % filtered.length); // dá a volta nas pontas
+      return;
+    }
+    if (e.key === 'Enter') {
+      if (!open || !filtered[destacado]) return;
+      e.preventDefault();
+      escolher(filtered[destacado]);
+      return;
+    }
+    if (e.key === 'Escape' && open) { e.preventDefault(); setOpen(false); }
+  };
 
   return (
     <div style={{ position: 'relative' }}>
       <input
         value={open ? query : (selected ? productLabel(selected) : '')}
-        onFocus={() => { setQuery(''); setOpen(true); }}
+        onFocus={abrir}
+        // onFocus não dispara quando o campo já está focado — sem este onClick,
+        // clicar de novo depois de escolher um produto não reabriria a lista.
+        onClick={() => { if (!open) abrir(); }}
         onChange={e => setQuery(e.target.value)}
         onBlur={() => setTimeout(() => setOpen(false), 150)}
+        onKeyDown={aoTeclar}
         placeholder="Buscar produto…"
+        role="combobox"
+        aria-expanded={open}
+        aria-controls={`${idBase}-lista`}
+        aria-autocomplete="list"
+        aria-activedescendant={open && filtered[destacado] ? `${idBase}-op-${destacado}` : undefined}
       />
       {open && (
-        <div style={{
-          position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 20,
-          background: '#FDFBF5', border: '1px solid var(--rule-strong)', borderRadius: 6,
-          maxHeight: 220, overflowY: 'auto', marginTop: 2, boxShadow: '0 4px 10px rgba(0,0,0,0.12)',
-        }}>
+        <div
+          id={`${idBase}-lista`}
+          ref={listaRef}
+          role="listbox"
+          style={{
+            position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 20,
+            background: '#FDFBF5', border: '1px solid var(--rule-strong)', borderRadius: 6,
+            maxHeight: 220, overflowY: 'auto', marginTop: 2, boxShadow: '0 4px 10px rgba(0,0,0,0.12)',
+          }}
+        >
           {filtered.length === 0 ? (
             <div style={{ padding: '0.55rem 0.6rem', fontSize: '0.82rem', color: 'var(--ink-soft)' }}>Nenhum produto encontrado</div>
           ) : (
-            filtered.map(p => (
-              <div
-                key={p.id}
-                onMouseDown={() => { onChange(p.id); setOpen(false); }}
-                style={{ padding: '0.5rem 0.6rem', fontSize: '0.85rem', cursor: 'pointer' }}
-                onMouseEnter={e => (e.currentTarget.style.background = 'var(--paper-dim)')}
-                onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
-              >
-                {productLabel(p)}
+            <>
+              {filtered.map((p, i) => (
+                <div
+                  key={p.id}
+                  id={`${idBase}-op-${i}`}
+                  data-indice={i}
+                  role="option"
+                  aria-selected={i === destacado}
+                  onMouseDown={() => escolher(p)}
+                  // o mouse move o mesmo destaque que as setas, para os dois não brigarem
+                  onMouseEnter={() => setDestacado(i)}
+                  style={{
+                    padding: '0.5rem 0.6rem', fontSize: '0.85rem', cursor: 'pointer',
+                    background: i === destacado ? 'var(--paper-dim)' : 'transparent',
+                  }}
+                >
+                  {productLabel(p)}
+                </div>
+              ))}
+              <div style={{
+                position: 'sticky', bottom: 0, padding: '0.35rem 0.6rem',
+                background: 'var(--paper-dim)', borderTop: '1px solid var(--rule)',
+                fontSize: '0.68rem', color: 'var(--ink-soft)', letterSpacing: '0.02em',
+              }}>
+                ↑↓ navegar · Enter selecionar · Esc fechar
               </div>
-            ))
+            </>
           )}
         </div>
       )}
@@ -110,13 +222,37 @@ function Main({ session, profile }) {
   const [tab, setTab] = useState('nova');
   const [trucks, setTrucks] = useState([]);
   const [products, setProducts] = useState([]);
-  const [orders, setOrders] = useState([]);
   const [profiles, setProfiles] = useState([]);
   const [order, setOrder] = useState(blankOrder());
   const [saveState, setSaveState] = useState('idle');
   const [filtroCaminhao, setFiltroCaminhao] = useState('');
   const [filtroDataDe, setFiltroDataDe] = useState('');
   const [filtroDataAte, setFiltroDataAte] = useState('');
+
+  // As agendadas são a fila de trabalho: poucas, e todas precisam estar à vista.
+  // As entregues são o arquivo, que só cresce — essas vêm por página.
+  const [agendadas, setAgendadas] = useState([]);
+  const [entregues, setEntregues] = useState([]);
+  const [entreguesTotal, setEntreguesTotal] = useState(0);
+  const [pagina, setPagina] = useState(0);
+  const [carregandoEntregues, setCarregandoEntregues] = useState(false);
+  const [aviso, setAviso] = useState(null); // { tipo: 'erro' | 'ok', texto }
+
+  const notificar = (tipo, texto) => setAviso({ tipo, texto, em: Date.now() });
+  useEffect(() => {
+    if (!aviso) return;
+    const t = setTimeout(() => setAviso(null), aviso.tipo === 'erro' ? 8000 : 3000);
+    return () => clearTimeout(t);
+  }, [aviso]);
+
+  // Traduz os erros mais comuns do Postgres/Supabase para algo acionável.
+  const explicarErro = (error) => {
+    if (!error) return 'erro desconhecido.';
+    if (error.code === '23503') return 'este registro está sendo usado por uma ordem e não pode ser removido.';
+    if (error.code === '42501') return 'você não tem permissão para isso.';
+    if (error.code === 'PGRST204') return `o banco não tem uma coluna que o site espera (${error.message}). Rode o migracao.sql no Supabase.`;
+    return error.message || 'erro desconhecido.';
+  };
 
   const tabs = [
     { key: 'nova', label: 'Nova Ordem', icon: FilePlus },
@@ -127,46 +263,97 @@ function Main({ session, profile }) {
     { key: 'historico', label: 'Histórico', icon: HistoryIcon },
   ];
 
+  // Os filtros são aplicados no banco, não na lista já carregada: com paginação,
+  // filtrar no cliente só procuraria dentro da página aberta — pior que antes.
+  const carregarEntregues = async (paginaAlvo = pagina) => {
+    setCarregandoEntregues(true);
+    let q = supabase.from('orders').select('*', { count: 'exact' }).eq('status', 'entregue');
+    if (filtroCaminhao) q = q.eq('truck_id', filtroCaminhao);
+    if (filtroDataDe) q = q.gte('data_entrega', filtroDataDe);
+    if (filtroDataAte) q = q.lte('data_entrega', filtroDataAte);
+
+    const { data, count, error } = await q
+      .order('data_entrega', { ascending: false, nullsFirst: false })
+      .order('created_at', { ascending: false })
+      .range(paginaAlvo * POR_PAGINA, paginaAlvo * POR_PAGINA + POR_PAGINA - 1);
+
+    setCarregandoEntregues(false);
+    if (error) return notificar('erro', `Não foi possível carregar as cargas entregues: ${explicarErro(error)}`);
+
+    // Apagar o último item de uma página deixaria a tela vazia sem motivo aparente.
+    if ((data || []).length === 0 && paginaAlvo > 0) { setPagina(paginaAlvo - 1); return; }
+
+    setEntregues(data || []);
+    setEntreguesTotal(count || 0);
+  };
+
   const loadAll = async () => {
-    const [{ data: t }, { data: p }, { data: o }, { data: pf }] = await Promise.all([
+    const [rt, rp, ra, rpf] = await Promise.all([
       supabase.from('trucks').select('*').order('placa'),
       supabase.from('products').select('*').order('descricao'),
-      supabase.from('orders').select('*').order('created_at', { ascending: false }),
+      supabase.from('orders').select('*').eq('status', 'agendada').order('data_entrega', { ascending: true, nullsFirst: false }),
       supabase.from('profiles').select('id, email'),
     ]);
-    setTrucks(t || []); setProducts(p || []); setOrders(o || []); setProfiles(pf || []);
+    const falhou = [rt, rp, ra, rpf].find(r => r.error);
+    if (falhou) notificar('erro', `Não foi possível carregar os dados: ${explicarErro(falhou.error)}`);
+    setTrucks(rt.data || []); setProducts(rp.data || []);
+    setAgendadas(ra.data || []); setProfiles(rpf.data || []);
+    await carregarEntregues();
   };
   useEffect(() => { loadAll(); }, []);
+
+  // Recarrega o arquivo quando o usuário troca de página ou mexe nos filtros.
+  // O loadAll acima já traz a primeira página, então pulamos a execução inicial.
+  const jaMontou = useRef(false);
+  useEffect(() => {
+    if (!jaMontou.current) { jaMontou.current = true; return; }
+    carregarEntregues();
+  }, [pagina, filtroCaminhao, filtroDataDe, filtroDataAte]);
 
   // ---- Caminhões ----
   const [truckForm, setTruckForm] = useState({ placa: '', motorista: ''});
   const addTruck = async () => {
-    if (!truckForm.placa.trim() || !truckForm.motorista.trim()) return;
+    if (!truckForm.placa.trim() || !truckForm.motorista.trim()) {
+      return notificar('erro', 'Preencha a placa e o motorista.');
+    }
     const { error } = await supabase.from('trucks').insert({
-      placa: truckForm.placa, motorista: truckForm.motorista,
+      placa: truckForm.placa.trim(), motorista: truckForm.motorista.trim(),
     });
-    if (!error) { setTruckForm({ placa: '', motorista: ''}); loadAll(); }
+    if (error) return notificar('erro', `Não foi possível cadastrar o caminhão: ${explicarErro(error)}`);
+    setTruckForm({ placa: '', motorista: '' });
+    notificar('ok', 'Caminhão cadastrado.');
+    loadAll();
   };
-  const removeTruck = async (id) => { await supabase.from('trucks').delete().eq('id', id); loadAll(); };
-
-  const entreguesFiltradas = orders.filter(o => {
-  if (o.status !== 'entregue') return false;
-  if (filtroCaminhao && o.truck_id !== filtroCaminhao) return false;
-  if (filtroDataDe && (!o.data_entrega || o.data_entrega < filtroDataDe)) return false;
-  if (filtroDataAte && (!o.data_entrega || o.data_entrega > filtroDataAte)) return false;
-  return true;
-  });
+  const removeTruck = async (t) => {
+    if (!window.confirm(`Remover o caminhão ${t.placa} — ${t.motorista}?`)) return;
+    const { error } = await supabase.from('trucks').delete().eq('id', t.id);
+    if (error) return notificar('erro', `Não foi possível remover o caminhão: ${explicarErro(error)}`);
+    notificar('ok', 'Caminhão removido.');
+    loadAll();
+  };
 
   // ---- Produtos ----
-  const [productForm, setProductForm] = useState({ descricao: '', unidade: 'Sacos 50kg', especie: 'ADUBO' });
+  // 'FERTILIZANTE' e não 'ADUBO': o valor inicial precisa ser um dos <option>
+  // abaixo, senão o select abre em branco e salva uma espécie que não existe na lista.
+  const produtoVazio = { descricao: '', unidade: 'Sacos 50kg', especie: 'FERTILIZANTE' };
+  const [productForm, setProductForm] = useState(produtoVazio);
   const addProduct = async () => {
-    if (!productForm.descricao.trim()) return;
+    if (!productForm.descricao.trim()) return notificar('erro', 'Preencha a descrição do produto.');
     const { error } = await supabase.from('products').insert({
-      descricao: productForm.descricao, unidade: productForm.unidade, especie: productForm.especie,
+      descricao: productForm.descricao.trim(), unidade: productForm.unidade, especie: productForm.especie,
     });
-    if (!error) { setProductForm({ descricao: '', unidade: 'Sacos 50kg', especie: 'ADUBO' }); loadAll(); }
+    if (error) return notificar('erro', `Não foi possível cadastrar o produto: ${explicarErro(error)}`);
+    setProductForm(produtoVazio);
+    notificar('ok', 'Produto cadastrado.');
+    loadAll();
   };
-  const removeProduct = async (id) => { await supabase.from('products').delete().eq('id', id); loadAll(); };
+  const removeProduct = async (p) => {
+    if (!window.confirm(`Remover o produto ${p.especie} ${p.descricao}?\n\nAs ordens já salvas continuam mostrando este item normalmente.`)) return;
+    const { error } = await supabase.from('products').delete().eq('id', p.id);
+    if (error) return notificar('erro', `Não foi possível remover o produto: ${explicarErro(error)}`);
+    notificar('ok', 'Produto removido.');
+    loadAll();
+  };
 
   // ---- Ordem ----
   const updateItem = (pid, itemId, patch) =>
@@ -216,43 +403,93 @@ function Main({ session, profile }) {
   const removeProdutor = (pid) =>
     setOrder(o => ({ ...o, produtores: o.produtores.filter(p => p.id !== pid) }));
 
-const totalProdutores = order.produtores.reduce((s, p) => s + (Number(p.quantidade) || 0), 0);
-
-
 const saveOrder = async () => {
+    // Produtor sem nome é descartado na hora de salvar e no PDF. Antes isso
+    // acontecia em silêncio; agora avisamos em vez de perder os itens.
+    const semNome = produtoresComputed.find(p => !(p.nome || '').trim() && p.items.some(it => it.productId));
+    if (semNome) {
+      return notificar('erro', 'Há itens lançados num produtor sem nome. Preencha o nome — senão esses itens não são salvos nem saem no PDF.');
+    }
+
+    const produtores = produtoresComputed.filter(p => (p.nome || '').trim()).map(p => ({
+      nome: p.nome.trim(),
+      items: p.items.filter(it => it.productId).map(it => ({
+        productId: it.productId, descricao: it.prod?.descricao, unidade: it.prod?.unidade, quantidade: Number(it.quantidade) || 0,
+        preco: it.preco, total: it.total, pagamento: it.pagamento,
+      })),
+      subtotalSacos: p.subtotalSacos, subtotalValor: p.subtotalValor,
+    }));
+
+    if (produtores.length === 0) return notificar('erro', 'Informe ao menos um produtor com nome.');
+    if (!produtores.some(p => p.items.length)) return notificar('erro', 'Adicione ao menos um item à ordem.');
+
     setSaveState('saving');
     const payload = {
       data_entrega: order.dataEntrega || null,
       hora: order.hora || null,
       nf: order.nf, transportadora: order.transportadora, truck_id: order.truckId || null, motorista: order.motorista,
-      produtores: produtoresComputed.filter(p => p.nome).map(p => ({
-        nome: p.nome,
-        items: p.items.filter(it => it.productId).map(it => ({
-          productId: it.productId, descricao: it.prod?.descricao, unidade: it.prod?.unidade, quantidade: Number(it.quantidade) || 0,
-          preco: it.preco, total: it.total, pagamento: it.pagamento,
-        })),
-        subtotalSacos: p.subtotalSacos, subtotalValor: p.subtotalValor,
-      })),
+      produtores,
       total_sacos: totalSacos, total_valor: totalValor, status: order.status || 'agendada',
     };
 
-    let error;
     if (order.id) {
-      ({ error } = await supabase.from('orders').update(payload).eq('id', order.id));
+      const { data, error } = await supabase.from('orders').update(payload).eq('id', order.id).select();
+      if (error) { setSaveState('idle'); return notificar('erro', `Não foi possível atualizar a ordem: ${explicarErro(error)}`); }
+      // Um update barrado por RLS não devolve erro: ele simplesmente não altera
+      // nenhuma linha. Sem o .select() abaixo o site mostrava "Salvo ✓" sem ter
+      // gravado nada. É por isso que "Marcar como entregue" parecia funcionar.
+      if (!data || data.length === 0) {
+        setSaveState('idle');
+        return notificar('erro', 'Nada foi gravado. A ordem pode ter sido apagada por outra pessoa, ou o banco ainda não tem a policy de UPDATE (rode o migracao.sql no Supabase).');
+      }
     } else {
-      const { data, error: insertError } = await supabase.from('orders').insert({ ...payload, created_by: session.user.id }).select().single();
-      error = insertError;
-      if (!error && data) setOrder(o => ({ ...o, id: data.id }));
+      const { data, error } = await supabase.from('orders')
+        .insert({ ...payload, created_by: session.user.id }).select().single();
+      if (error) { setSaveState('idle'); return notificar('erro', `Não foi possível salvar a ordem: ${explicarErro(error)}`); }
+      setOrder(o => ({ ...o, id: data.id }));
     }
 
-    if (!error) { await loadAll(); setSaveState('saved'); setTimeout(() => setSaveState('idle'), 1800); }
-    else setSaveState('idle');
+    await loadAll();
+    setSaveState('saved');
+    setTimeout(() => setSaveState('idle'), 1800);
   };
 
-  const deleteOrder = async (id) => { await supabase.from('orders').delete().eq('id', id); loadAll(); };
+  // Um update barrado por RLS devolve sucesso com zero linhas alteradas, então
+  // conferimos o retorno em vez de confiar apenas na ausência de erro.
+  const atualizarOrdem = async (id, patch, rotulo) => {
+    const { data, error } = await supabase.from('orders').update(patch).eq('id', id).select();
+    if (error) { notificar('erro', `Não foi possível ${rotulo}: ${explicarErro(error)}`); return false; }
+    if (!data || data.length === 0) {
+      notificar('erro', `Não foi possível ${rotulo}: nenhuma linha foi alterada. Verifique se o migracao.sql já foi rodado no Supabase.`);
+      return false;
+    }
+    await loadAll();
+    return true;
+  };
+
+  const deleteOrder = async (o) => {
+    const quem = (o.produtores || []).map(p => p.nome).filter(Boolean).join(', ') || 'sem produtor';
+    if (!window.confirm(`Apagar a ordem de ${dateBR(o.data_entrega)} (${quem})?\n\nIsso não pode ser desfeito.`)) return;
+    const { error } = await supabase.from('orders').delete().eq('id', o.id);
+    if (error) return notificar('erro', `Não foi possível apagar a ordem: ${explicarErro(error)}`);
+    if (order.id === o.id) setOrder(blankOrder());
+    notificar('ok', 'Ordem apagada.');
+    loadAll();
+  };
+
   const markAsDelivered = async (id) => {
-  await supabase.from('orders').update({ status: 'entregue' }).eq('id', id);
-  loadAll();
+    const ok = await atualizarOrdem(id, {
+      status: 'entregue',
+      entregue_por: session.user.id,
+      entregue_em: new Date().toISOString(),
+    }, 'marcar como entregue');
+    if (ok) notificar('ok', 'Carga marcada como entregue.');
+  };
+
+  const reopenOrder = async (id) => {
+    if (!window.confirm('Voltar esta carga para "agendada"?')) return;
+    const ok = await atualizarOrdem(id, { status: 'agendada', entregue_por: null, entregue_em: null }, 'reabrir a carga');
+    if (ok) notificar('ok', 'Carga voltou para agendada.');
   };
   const loadOrderIntoForm = (o) => {
     setOrder({
@@ -336,8 +573,13 @@ const saveOrder = async () => {
         .ocw-preview-wrap .ocw-doc { width:100%; max-width:640px; }
         .ocw-save-pill { font-size:0.78rem; font-family:'IBM Plex Mono',monospace; padding:0.3rem 0.6rem; border-radius:20px; background:var(--paper-dim); color:var(--ink-soft); }
         .ocw-save-pill.saved { background:#E4EDE0; color:var(--green-deep); }
+        .ocw-pager { display:flex; align-items:center; justify-content:space-between; gap:0.7rem; flex-wrap:wrap; padding-top:0.9rem; margin-top:0.4rem; border-top:1px solid var(--rule); font-size:0.8rem; color:var(--ink-soft); }
+        .ocw-aviso { position:fixed; left:50%; transform:translateX(-50%); bottom:1.2rem; z-index:100; width:min(560px,92vw); padding:0.75rem 0.9rem; border-radius:9px; font-size:0.85rem; line-height:1.45; box-shadow:0 6px 20px rgba(0,0,0,0.18); display:flex; gap:0.7rem; align-items:flex-start; }
+        .ocw-aviso.erro { background:#FBE9E6; border:1px solid var(--danger); color:#6E2A20; }
+        .ocw-aviso.ok { background:#E4EDE0; border:1px solid var(--green); color:var(--green-deep); }
+        .ocw-aviso button { background:none; border:none; cursor:pointer; color:inherit; padding:0; line-height:1; flex-shrink:0; }
         @media print {
-        .ocw-header, .ocw-tabs, .ocw-noprint { display: none !important; }
+        .ocw-header, .ocw-tabs, .ocw-noprint, .ocw-aviso { display: none !important; }
         .ocw-root { padding: 0 !important; margin: 0 !important; min-height: 0 !important; }
         .ocw-body { padding: 0 !important; margin: 0 !important; }
         .ocw-nova-grid { display: block !important; gap: 0 !important; }
@@ -402,7 +644,7 @@ const saveOrder = async () => {
                 trucks.map(t => (
                   <div className="ocw-list-row" key={t.id}>
                     <div><b>{t.placa}</b> — {t.motorista}</div>
-                    <button className="ocw-btn danger" onClick={() => removeTruck(t.id)}><Trash2 size={15} /></button>
+                    <button className="ocw-btn danger" onClick={() => removeTruck(t)}><Trash2 size={15} /></button>
                   </div>
                 ))
               )}
@@ -457,7 +699,7 @@ const saveOrder = async () => {
                 products.map(p => (
                   <div className="ocw-list-row" key={p.id}>
                     <div><b>{p.especie} {p.descricao}</b> — {p.unidade}</div>
-                    <button className="ocw-btn danger" onClick={() => removeProduct(p.id)}><Trash2 size={15} /></button>
+                    <button className="ocw-btn danger" onClick={() => removeProduct(p)}><Trash2 size={15} /></button>
                   </div>
                 ))
               )}
@@ -469,10 +711,10 @@ const saveOrder = async () => {
           <>
             <div className="ocw-card">
               <h2><HistoryIcon size={17} /> Cargas agendadas</h2>
-              {orders.filter(o => (o.status || 'agendada') === 'agendada').length === 0 ? (
+              {agendadas.length === 0 ? (
                 <div className="ocw-empty">Nenhuma carga agendada.</div>
               ) : (
-                orders.filter(o => (o.status || 'agendada') === 'agendada').map(o => (
+                agendadas.map(o => (
                   <div className="ocw-list-row" key={o.id}>
                     <div>
                       <b>{dateBR(o.data_entrega)}</b> — {(o.produtores || []).map(p => p.nome).filter(Boolean).join(', ') || 'sem produtor'}{' '}
@@ -482,9 +724,7 @@ const saveOrder = async () => {
                     <div style={{ display: 'flex', gap: '0.4rem' }}>
                       <button className="ocw-btn ghost" onClick={() => loadOrderIntoForm(o)}>Ver / reimprimir</button>
                       <button className="ocw-btn primary" onClick={() => markAsDelivered(o.id)}>Marcar como entregue</button>
-                      {(isAdmin || o.created_by === session.user.id) && (
-                        <button className="ocw-btn danger" onClick={() => deleteOrder(o.id)}><Trash2 size={15} /></button>
-                      )}
+                      <button className="ocw-btn danger" onClick={() => deleteOrder(o)}><Trash2 size={15} /></button>
                     </div>
                   </div>
                 ))
@@ -496,7 +736,7 @@ const saveOrder = async () => {
               <div className="ocw-grid g2" style={{ marginBottom: '0.9rem' }}>
                 <div className="ocw-field">
                   <label>Filtrar por caminhão</label>
-                  <select value={filtroCaminhao} onChange={e => setFiltroCaminhao(e.target.value)}>
+                  <select value={filtroCaminhao} onChange={e => { setFiltroCaminhao(e.target.value); setPagina(0); }}>
                     <option value="">Todos</option>
                     {trucks.map(t => <option key={t.id} value={t.id}>{t.placa} — {t.motorista}</option>)}
                   </select>
@@ -504,34 +744,66 @@ const saveOrder = async () => {
                 <div className="ocw-grid g2">
                   <div className="ocw-field">
                     <label>De</label>
-                    <input type="date" value={filtroDataDe} onChange={e => setFiltroDataDe(e.target.value)} />
+                    <input type="date" value={filtroDataDe} onChange={e => { setFiltroDataDe(e.target.value); setPagina(0); }} />
                   </div>
                   <div className="ocw-field">
                     <label>Até</label>
-                    <input type="date" value={filtroDataAte} onChange={e => setFiltroDataAte(e.target.value)} />
+                    <input type="date" value={filtroDataAte} onChange={e => { setFiltroDataAte(e.target.value); setPagina(0); }} />
                   </div>
                 </div>
               </div>
 
-              {entreguesFiltradas.length === 0 ? (
+              {(filtroCaminhao || filtroDataDe || filtroDataAte) && (
+                <div style={{ marginBottom: '0.7rem' }}>
+                  <button className="ocw-btn ghost" onClick={() => { setFiltroCaminhao(''); setFiltroDataDe(''); setFiltroDataAte(''); setPagina(0); }}>
+                    <X size={15} /> Limpar filtros
+                  </button>
+                </div>
+              )}
+
+              {carregandoEntregues ? (
+                <div className="ocw-empty">Carregando…</div>
+              ) : entregues.length === 0 ? (
                 <div className="ocw-empty">Nenhuma carga entregue encontrada.</div>
               ) : (
-                entreguesFiltradas.map(o => (
+                entregues.map(o => (
                   <div className="ocw-list-row" key={o.id}>
                     <div>
                       <b>{dateBR(o.data_entrega)}</b> — {(o.produtores || []).map(p => p.nome).filter(Boolean).join(', ') || 'sem produtor'}{' '}
                       <span className="ocw-tag">{trucks.find(t => t.id === o.truck_id)?.placa || '—'}</span>{' '}
                       <span className="ocw-tag">{orderTipoLabel(o)}</span>{' '}
-                      <span className="ocw-tag">por {criadorLabel(profiles, o.created_by)}</span>
+                      <span className="ocw-tag">por {criadorLabel(profiles, o.created_by)}</span>{' '}
+                      {o.entregue_por && (
+                        <span className="ocw-tag">entregue por {criadorLabel(profiles, o.entregue_por)}{o.entregue_em ? ` em ${dateHoraBR(o.entregue_em)}` : ''}</span>
+                      )}
                     </div>
                     <div style={{ display: 'flex', gap: '0.4rem' }}>
                       <button className="ocw-btn ghost" onClick={() => loadOrderIntoForm(o)}>Ver / reimprimir</button>
-                      {(isAdmin || o.created_by === session.user.id) && (
-                        <button className="ocw-btn danger" onClick={() => deleteOrder(o.id)}><Trash2 size={15} /></button>
-                      )}
+                      <button className="ocw-btn ghost" onClick={() => reopenOrder(o.id)}>Reabrir</button>
+                      <button className="ocw-btn danger" onClick={() => deleteOrder(o)}><Trash2 size={15} /></button>
                     </div>
                   </div>
                 ))
+              )}
+
+              {entreguesTotal > 0 && (
+                <div className="ocw-pager">
+                  <span className="ocw-mono">
+                    {pagina * POR_PAGINA + 1}–{Math.min((pagina + 1) * POR_PAGINA, entreguesTotal)} de {entreguesTotal} carga{entreguesTotal === 1 ? '' : 's'}
+                  </span>
+                  <div style={{ display: 'flex', gap: '0.4rem' }}>
+                    <button
+                      className="ocw-btn ghost"
+                      disabled={pagina === 0 || carregandoEntregues}
+                      onClick={() => setPagina(p => Math.max(0, p - 1))}
+                    >Anterior</button>
+                    <button
+                      className="ocw-btn ghost"
+                      disabled={(pagina + 1) * POR_PAGINA >= entreguesTotal || carregandoEntregues}
+                      onClick={() => setPagina(p => p + 1)}
+                    >Próxima</button>
+                  </div>
+                </div>
               )}
             </div>
           </>
@@ -718,6 +990,13 @@ const saveOrder = async () => {
           </div>
         )}
       </main>
+
+      {aviso && (
+        <div className={`ocw-aviso ${aviso.tipo}`} role="status">
+          <span style={{ flex: 1 }}>{aviso.texto}</span>
+          <button onClick={() => setAviso(null)} aria-label="Fechar aviso"><X size={16} /></button>
+        </div>
+      )}
     </div>
   );
 }
